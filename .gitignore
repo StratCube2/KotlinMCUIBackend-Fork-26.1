@@ -1,0 +1,39 @@
+# Gradle build artifacts
+/build/
+/.gradle/
+!gradle/wrapper/gradle-wrapper.jar
+
+
+# IDE files (IntelliJ IDEA & Eclipse)
+/.idea/
+*.iml
+*.ipr
+*.iws
+/.settings/
+/.project/
+/.classpath/
+/bin/
+
+# Visual Studio Code data
+/.vscode/
+
+# Local Minecraft runtime environments (test worlds, configs, and logs)
+/run/
+/runClient/
+/runServer/
+/runData/
+/runGameTest/
+/gamedir/
+/logs/
+/saves/
+/crash-reports/
+/usernamecache.json
+
+# Operating System overhead files
+.DS_Store
+Thumbs.db
+
+# Output compiled packages
+*.jar
+!*sources.jar
+!*javadoc.jar
