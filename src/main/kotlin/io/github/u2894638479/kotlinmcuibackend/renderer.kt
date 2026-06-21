@@ -36,9 +36,9 @@ internal val renderer = object : DslBackendRenderer<GuiGraphicsExtractor> {
         val r = rect.toInt()
         
         val spriteName = when {
-            !active -> "widget/slider"
-            highlighted -> "widget/slider_highlighted"
-            else -> "widget/slider"
+            !active -> "widget/button_disabled"
+            highlighted -> "widget/button_highlighted"
+            else -> "widget/button"
         }
         
         // blitSprite with direct ARGB color parameter in 26.1
@@ -81,7 +81,7 @@ internal val renderer = object : DslBackendRenderer<GuiGraphicsExtractor> {
         
         renderParam.blitSprite(
             RenderPipelines.GUI_TEXTURED,
-            Identifier.parse("minecraft:container/slot"),
+            Identifier.parse("minecraft:container/slot/slot"),
             r.left, r.top, r.width, r.height,
             0xFFFFFFFF.toInt()
         )
@@ -99,17 +99,27 @@ internal val renderer = object : DslBackendRenderer<GuiGraphicsExtractor> {
     context(renderParam: GuiGraphicsExtractor, ctx: DslScaleContext)
     override fun renderItem(rect: Rect, item: String, count: Int, damage: Double?, enchanted: Boolean) {
         val itemOpt = BuiltInRegistries.ITEM.getOptional(Identifier.parse(item))
-        if (!itemOpt.isPresent) {
+        val itemStackOrNull = if (!itemOpt.isPresent) null else try {
+            itemOpt.get().defaultInstance.also {
+                it.count = count
+                if (damage != null) {
+                    it.damageValue = (damage * it.maxDamage).roundToInt()
+                }
+                if (enchanted) it.set(DataComponents.ENCHANTMENT_GLINT_OVERRIDE, true)
+            }
+        } catch (e: NullPointerException) {
+            // Holder<Item>.itemComponents() (and thus getDefaultInstance()) NPEs with
+            // "Components not bound yet" when this Holder's component-binding pass hasn't
+            // run for the current registry instance — observed during extractRenderState,
+            // i.e. before client startup's registry/component bootstrap has fully completed.
+            // Degrade to the missing-item placeholder instead of crashing the frame.
+            null
+        }
+        if (itemStackOrNull == null) {
             renderImage(ImageHolder("missing", 16.px, 16.px), rect, Rect(0.px, 0.px, 16.px, 16.px), Color.WHITE)
         } else {
             stack {
-                val itemStack = itemOpt.get().defaultInstance.also {
-                    it.count = count
-                    if (damage != null) {
-                        it.damageValue = (damage * it.maxDamage).roundToInt()
-                    }
-                    if (enchanted) it.set(DataComponents.ENCHANTMENT_GLINT_OVERRIDE, true)
-                }
+                val itemStack = itemStackOrNull
                 val r = rect.toDouble().ifEmpty { return@stack }
                 renderParam.pose().translate(r.left.toFloat(), r.top.toFloat())
                 renderParam.pose().scale((r.width / 16.0).toFloat(), (r.height / 16.0).toFloat())
@@ -123,7 +133,11 @@ internal val renderer = object : DslBackendRenderer<GuiGraphicsExtractor> {
 
     context(renderParam: GuiGraphicsExtractor)
     override fun withScissor(rect: Rect, block: () -> Unit) {
-        val r = (rect / guiScale).toInt()
+        // enableScissor expects the same logical GUI-scaled coordinate space as every
+        // other draw call (blit/blitSprite/fill) — it multiplies by guiScale itself
+        // internally to get physical pixels. Dividing by guiScale here was double-scaling:
+        // correct by coincidence at 1x, increasingly wrong (over-clipped) at higher scales.
+        val r = rect.toInt()
         renderParam.enableScissor(r.left, r.top, r.right, r.bottom)
         try {
             block()
@@ -193,13 +207,15 @@ internal val renderer = object : DslBackendRenderer<GuiGraphicsExtractor> {
     context(ctx: DslScaleContext, renderParam: GuiGraphicsExtractor)
     override fun renderDefaultBackground(rect: Rect) {
         if (rect.isEmpty) return
-        val r = rect.toInt()
-        
-        renderParam.blitSprite(
-            RenderPipelines.GUI_TEXTURED,
-            Identifier.parse("minecraft:menu/background"),
-            r.left, r.top, r.width, r.height,
-            0xFFFFFFFF.toInt()
+        // "minecraft:menu/background" is not a real sprite — there is no sprites/menu/
+        // folder in the 26.1 GUI atlas (confirmed by browsing the jar directly).
+        // The vanilla menu/options background is a raw tiled texture, not a sprite,
+        // so it has to go through ImageStrategy.repeat + Screen.MENU_BACKGROUND
+        // instead of blitSprite.
+        ImageStrategy.repeat(scale = ctx.scale).render(
+            rect,
+            ImageHolder(Screen.MENU_BACKGROUND.toString(), 32.px, 32.px),
+            Color(0.25, 0.25, 0.25)
         )
     }
 

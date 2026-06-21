@@ -13,6 +13,7 @@
 /.project/
 /.classpath/
 /bin/
+/.kotlin/
 
 # Visual Studio Code data
 /.vscode/

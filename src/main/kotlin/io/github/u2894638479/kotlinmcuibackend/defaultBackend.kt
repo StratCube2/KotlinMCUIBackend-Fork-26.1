@@ -88,6 +88,10 @@ val defaultBackend: DslBackend<GuiGraphicsExtractor, Screen> = object : DslBacke
 
             override fun charTyped(event: net.minecraft.client.input.CharacterEvent): Boolean {
                 val charVal = event.codepoint().toChar()
+                // Some Android keyboard/launcher input bridges (e.g. Zalith Launcher) forward
+                // control characters like '\n' through charTyped instead of a proper key event.
+                // A single-line text field should never accept these, so drop them here.
+                if (Character.isISOControl(charVal)) return true
                 if (context(EventModifier(0)) { dslScreen.charTyped(charVal) }) return true
                 return super.charTyped(event)
             }
