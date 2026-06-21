@@ -1,7 +1,6 @@
 package io.github.u2894638479.kotlinmcuibackend
 
 import com.mojang.blaze3d.systems.RenderSystem
-import com.mojang.blaze3d.vertex.VertexConsumer
 import io.github.u2894638479.kotlinmcui.backend.DslBackendRenderer
 import io.github.u2894638479.kotlinmcui.context.DslScaleContext
 import io.github.u2894638479.kotlinmcui.image.ImageHolder
@@ -18,7 +17,7 @@ import net.minecraft.client.Minecraft
 import net.minecraft.client.gui.GuiGraphicsExtractor
 import net.minecraft.client.gui.screens.Screen
 import net.minecraft.client.gui.screens.inventory.tooltip.TooltipRenderUtil
-import net.minecraft.client.renderer.RenderType
+import net.minecraft.client.renderer.RenderPipelines
 import net.minecraft.core.component.DataComponents
 import net.minecraft.core.registries.BuiltInRegistries
 import net.minecraft.resources.Identifier
@@ -31,23 +30,20 @@ import kotlin.math.roundToInt
 internal val renderer = object : DslBackendRenderer<GuiGraphicsExtractor> {
     override val guiScale get() = Minecraft.getInstance().window.guiScale.toDouble()
 
-    private fun VertexConsumer.color(color: Color) = color(color.rInt, color.gInt, color.bInt, color.aInt)
-
     context(renderParam: GuiGraphicsExtractor, ctx: DslScaleContext)
     override fun renderButton(rect: Rect, highlighted: Boolean, active: Boolean, color: Color) {
         if (rect.isEmpty) return
         val r = rect.toInt()
         
-        // Point to the native vanilla button sprites we saw in your JAR folder
         val spriteName = when {
-            !active -> "widget/button_disabled"
-            highlighted -> "widget/button_highlighted"
-            else -> "widget/button"
+            !active -> "widget/slider"
+            highlighted -> "widget/slider_highlighted"
+            else -> "widget/slider"
         }
         
-        // blitSprite reads the .mcmeta and automatically applies the 9-slice borders!
+        // blitSprite with direct ARGB color parameter in 26.1
         renderParam.blitSprite(
-            RenderType::guiTextured,
+            RenderPipelines.GUI_TEXTURED,
             Identifier.parse("minecraft:$spriteName"),
             r.left, r.top, r.width, r.height,
             color.argbInt
@@ -70,12 +66,11 @@ internal val renderer = object : DslBackendRenderer<GuiGraphicsExtractor> {
         if (rect.isEmpty) return
         val r = rect.toInt()
         
-        // Uses native popup/background from the JAR with auto 9-slice
         renderParam.blitSprite(
-            RenderType::guiTextured,
+            RenderPipelines.GUI_TEXTURED,
             Identifier.parse("minecraft:popup/background"),
             r.left, r.top, r.width, r.height,
-            Color.WHITE.argbInt
+            0xFFFFFFFF.toInt() // opaque white tint
         )
     }
 
@@ -84,12 +79,11 @@ internal val renderer = object : DslBackendRenderer<GuiGraphicsExtractor> {
         if (rect.isEmpty) return
         val r = rect.toInt()
         
-        // Uses native container/slot from the JAR with auto 9-slice
         renderParam.blitSprite(
-            RenderType::guiTextured,
+            RenderPipelines.GUI_TEXTURED,
             Identifier.parse("minecraft:container/slot"),
             r.left, r.top, r.width, r.height,
-            Color.WHITE.argbInt
+            0xFFFFFFFF.toInt()
         )
     }
 
@@ -105,47 +99,35 @@ internal val renderer = object : DslBackendRenderer<GuiGraphicsExtractor> {
     context(renderParam: GuiGraphicsExtractor, ctx: DslScaleContext)
     override fun renderItem(rect: Rect, item: String, count: Int, damage: Double?, enchanted: Boolean) {
         val itemOpt = BuiltInRegistries.ITEM.getOptional(Identifier.parse(item))
-        if (!itemOpt.isPresent) return
-        
-        stack {
-            val itemStack = try {
-                val baseItem = itemOpt.get()
-                // Prevent crash: Cannot generate DefaultInstance for Air
-                if (baseItem == net.minecraft.world.item.Items.AIR) return@stack
-                
-                ItemStack(baseItem, count).also {
+        if (!itemOpt.isPresent) {
+            renderImage(ImageHolder("missing", 16.px, 16.px), rect, Rect(0.px, 0.px, 16.px, 16.px), Color.WHITE)
+        } else {
+            stack {
+                val itemStack = itemOpt.get().defaultInstance.also {
+                    it.count = count
                     if (damage != null) {
                         it.damageValue = (damage * it.maxDamage).roundToInt()
                     }
                     if (enchanted) it.set(DataComponents.ENCHANTMENT_GLINT_OVERRIDE, true)
                 }
-            } catch (e: Exception) {
-                null
+                val r = rect.toDouble().ifEmpty { return@stack }
+                renderParam.pose().translate(r.left.toFloat(), r.top.toFloat())
+                renderParam.pose().scale((r.width / 16.0).toFloat(), (r.height / 16.0).toFloat())
+
+                renderParam.item(itemStack, 0, 0)
+                val countStr = if (count > 1) count.toString() else null
+                renderParam.itemDecorations(Minecraft.getInstance().font, itemStack, 0, 0, countStr)
             }
-
-            if (itemStack == null) return@stack
-
-            val r = rect.toDouble().ifEmpty { return@stack }
-            renderParam.pose().translate(r.left.toFloat(), r.top.toFloat())
-            renderParam.pose().scale((r.width / 16.0).toFloat(), (r.height / 16.0).toFloat())
-
-            renderParam.item(itemStack, 0, 0)
-            val countStr = if (count > 1) count.toString() else null
-            renderParam.itemDecorations(Minecraft.getInstance().font, itemStack, 0, 0, countStr)
         }
     }
 
     context(renderParam: GuiGraphicsExtractor)
     override fun withScissor(rect: Rect, block: () -> Unit) {
-        // Fix split-half and UI bleed: end rendering batch before scissor bounds are applied
-        renderParam.bufferSource.endBatch()
         val r = (rect / guiScale).toInt()
         renderParam.enableScissor(r.left, r.top, r.right, r.bottom)
         try {
             block()
         } finally {
-            // End batch while scissor is still active before disabling bounds
-            renderParam.bufferSource.endBatch()
             renderParam.disableScissor()
         }
     }
@@ -179,38 +161,45 @@ internal val renderer = object : DslBackendRenderer<GuiGraphicsExtractor> {
 
     context(renderParam: GuiGraphicsExtractor)
     override fun renderImage(image: ImageHolder, rect: Rect, uv: Rect, color: Color) {
-        if (image.isEmpty || image.id == "missing") return
-        val r = rect.toFloat().ifEmpty { return }
+        if (image.isEmpty) return
+        val r = rect.toInt()
+        val destX = r.left
+        val destY = r.top
+        val destW = r.width
+        val destH = r.height
         
-        val minU = (uv.left / image.width).toFloat()
-        val maxU = (uv.right / image.width).toFloat()
-        val minV = (uv.top / image.height).toFloat()
-        val maxV = (uv.bottom / image.height).toFloat()
+        val u = uv.left.raw.toFloat()
+        val v = uv.top.raw.toFloat()
 
-        // Safely fetch buffer using vanilla RenderType
-        val renderType = RenderType.guiTextured(Identifier.parse(image.id))
-        val vc = renderParam.bufferSource.getBuffer(renderType)
-        val matrix = renderParam.pose().last().pose()
+        val imgW = image.width.raw.toInt()
+        val imgH = image.height.raw.toInt()
         
-        vc.vertex(matrix, r.left, r.top, 0f).color(color).uv(minU, minV).endVertex()
-        vc.vertex(matrix, r.left, r.bottom, 0f).color(color).uv(minU, maxV).endVertex()
-        vc.vertex(matrix, r.right, r.bottom, 0f).color(color).uv(maxU, maxV).endVertex()
-        vc.vertex(matrix, r.right, r.top, 0f).color(color).uv(maxU, minV).endVertex()
+        // Correct 11-argument blit method signature for 26.1, including direct ARGB tint
+        renderParam.blit(
+            RenderPipelines.GUI_TEXTURED,
+            Identifier.parse(image.id),
+            destX,
+            destY,
+            u,
+            v,
+            destW,
+            destH,
+            imgW,
+            imgH,
+            color.argbInt
+        )
     }
 
     context(ctx: DslScaleContext, renderParam: GuiGraphicsExtractor)
     override fun renderDefaultBackground(rect: Rect) {
-        // Tiled dark dirt menu background
-        val bgLocation = try {
-            Screen.BACKGROUND_LOCATION.toString()
-        } catch (e: Throwable) {
-            "minecraft:textures/gui/options_background.png"
-        }
+        if (rect.isEmpty) return
+        val r = rect.toInt()
         
-        ImageStrategy.repeat(scale = ctx.scale).render(
-            rect,
-            ImageHolder(bgLocation, 32.px, 32.px),
-            Color(0.25, 0.25, 0.25)
+        renderParam.blitSprite(
+            RenderPipelines.GUI_TEXTURED,
+            Identifier.parse("minecraft:menu/background"),
+            r.left, r.top, r.width, r.height,
+            0xFFFFFFFF.toInt()
         )
     }
 
