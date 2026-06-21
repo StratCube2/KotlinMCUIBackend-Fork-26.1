@@ -18,7 +18,7 @@ import net.minecraft.client.Minecraft
 import net.minecraft.client.gui.GuiGraphicsExtractor
 import net.minecraft.client.gui.screens.Screen
 import net.minecraft.client.gui.screens.inventory.tooltip.TooltipRenderUtil
-import net.minecraft.client.renderer.RenderPipelines
+import net.minecraft.client.renderer.RenderType
 import net.minecraft.core.component.DataComponents
 import net.minecraft.core.registries.BuiltInRegistries
 import net.minecraft.resources.Identifier
@@ -36,13 +36,22 @@ internal val renderer = object : DslBackendRenderer<GuiGraphicsExtractor> {
     context(renderParam: GuiGraphicsExtractor, ctx: DslScaleContext)
     override fun renderButton(rect: Rect, highlighted: Boolean, active: Boolean, color: Color) {
         if (rect.isEmpty) return
-        var textureY = 0
-        if (highlighted) textureY += 20
-        if (active) textureY += 40
-        val uvOuter = Rect(0.px, textureY.px, 200.px, (textureY + 20).px)
+        val r = rect.toInt()
         
-        val image = ImageHolder("kotlinmcuibackend:textures/gui/slider.png", 256.px, 256.px)
-        ImageStrategy.nineSlice(uvOuter, uvOuter.expand(-3.px), ctx.scale).render(rect, image, color)
+        // Point to the native vanilla button sprites we saw in your JAR folder
+        val spriteName = when {
+            !active -> "widget/button_disabled"
+            highlighted -> "widget/button_highlighted"
+            else -> "widget/button"
+        }
+        
+        // blitSprite reads the .mcmeta and automatically applies the 9-slice borders!
+        renderParam.blitSprite(
+            RenderType::guiTextured,
+            Identifier.parse("minecraft:$spriteName"),
+            r.left, r.top, r.width, r.height,
+            color.argbInt
+        )
     }
 
     context(renderParam: GuiGraphicsExtractor)
@@ -58,23 +67,29 @@ internal val renderer = object : DslBackendRenderer<GuiGraphicsExtractor> {
 
     context(renderParam: GuiGraphicsExtractor, ctx: DslScaleContext)
     override fun renderContainer(rect: Rect) {
-        ImageStrategy.nineSlice(
-            Rect(0.px, 0.px, 248.px, 166.px), Rect(3.px, 3.px, 245.px, 163.px), ctx.scale
-        ).render(
-            rect, 
-            ImageHolder("kotlinmcuibackend:textures/gui/demo_background.png", 256.px, 256.px), 
-            Color.WHITE
+        if (rect.isEmpty) return
+        val r = rect.toInt()
+        
+        // Uses native popup/background from the JAR with auto 9-slice
+        renderParam.blitSprite(
+            RenderType::guiTextured,
+            Identifier.parse("minecraft:popup/background"),
+            r.left, r.top, r.width, r.height,
+            Color.WHITE.argbInt
         )
     }
 
     context(renderParam: GuiGraphicsExtractor, ctx: DslScaleContext)
     override fun renderSlot(rect: Rect) {
-        ImageStrategy.nineSlice(
-            Rect(7.px, 141.px, 25.px, 159.px), Rect(8.px, 142.px, 24.px, 158.px), ctx.scale
-        ).render(
-            rect, 
-            ImageHolder("kotlinmcuibackend:textures/gui/inventory.png", 256.px, 256.px), 
-            Color.WHITE
+        if (rect.isEmpty) return
+        val r = rect.toInt()
+        
+        // Uses native container/slot from the JAR with auto 9-slice
+        renderParam.blitSprite(
+            RenderType::guiTextured,
+            Identifier.parse("minecraft:container/slot"),
+            r.left, r.top, r.width, r.height,
+            Color.WHITE.argbInt
         )
     }
 
@@ -95,7 +110,7 @@ internal val renderer = object : DslBackendRenderer<GuiGraphicsExtractor> {
         stack {
             val itemStack = try {
                 val baseItem = itemOpt.get()
-                // Prevent creating itemstacks of invalid/unbound items like AIR
+                // Prevent crash: Cannot generate DefaultInstance for Air
                 if (baseItem == net.minecraft.world.item.Items.AIR) return@stack
                 
                 ItemStack(baseItem, count).also {
@@ -122,12 +137,14 @@ internal val renderer = object : DslBackendRenderer<GuiGraphicsExtractor> {
 
     context(renderParam: GuiGraphicsExtractor)
     override fun withScissor(rect: Rect, block: () -> Unit) {
+        // Fix split-half and UI bleed: end rendering batch before scissor bounds are applied
         renderParam.bufferSource.endBatch()
         val r = (rect / guiScale).toInt()
         renderParam.enableScissor(r.left, r.top, r.right, r.bottom)
         try {
             block()
         } finally {
+            // End batch while scissor is still active before disabling bounds
             renderParam.bufferSource.endBatch()
             renderParam.disableScissor()
         }
@@ -170,7 +187,8 @@ internal val renderer = object : DslBackendRenderer<GuiGraphicsExtractor> {
         val minV = (uv.top / image.height).toFloat()
         val maxV = (uv.bottom / image.height).toFloat()
 
-        val renderType = RenderPipelines.GUI_TEXTURED.apply(Identifier.parse(image.id))
+        // Safely fetch buffer using vanilla RenderType
+        val renderType = RenderType.guiTextured(Identifier.parse(image.id))
         val vc = renderParam.bufferSource.getBuffer(renderType)
         val matrix = renderParam.pose().last().pose()
         
@@ -182,9 +200,16 @@ internal val renderer = object : DslBackendRenderer<GuiGraphicsExtractor> {
 
     context(ctx: DslScaleContext, renderParam: GuiGraphicsExtractor)
     override fun renderDefaultBackground(rect: Rect) {
+        // Tiled dark dirt menu background
+        val bgLocation = try {
+            Screen.BACKGROUND_LOCATION.toString()
+        } catch (e: Throwable) {
+            "minecraft:textures/gui/options_background.png"
+        }
+        
         ImageStrategy.repeat(scale = ctx.scale).render(
             rect,
-            ImageHolder("kotlinmcuibackend:textures/gui/background.png", 32.px, 32.px),
+            ImageHolder(bgLocation, 32.px, 32.px),
             Color(0.25, 0.25, 0.25)
         )
     }
@@ -226,4 +251,4 @@ internal val renderer = object : DslBackendRenderer<GuiGraphicsExtractor> {
             )
         }
     }
-} 
+}
