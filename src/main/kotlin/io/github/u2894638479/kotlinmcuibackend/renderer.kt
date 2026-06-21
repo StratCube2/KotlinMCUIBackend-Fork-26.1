@@ -1,6 +1,7 @@
 package io.github.u2894638479.kotlinmcuibackend
 
 import com.mojang.blaze3d.systems.RenderSystem
+import com.mojang.blaze3d.vertex.VertexConsumer
 import io.github.u2894638479.kotlinmcui.backend.DslBackendRenderer
 import io.github.u2894638479.kotlinmcui.context.DslScaleContext
 import io.github.u2894638479.kotlinmcui.image.ImageHolder
@@ -30,31 +31,18 @@ import kotlin.math.roundToInt
 internal val renderer = object : DslBackendRenderer<GuiGraphicsExtractor> {
     override val guiScale get() = Minecraft.getInstance().window.guiScale.toDouble()
 
+    private fun VertexConsumer.color(color: Color) = color(color.rInt, color.gInt, color.bInt, color.aInt)
+
     context(renderParam: GuiGraphicsExtractor, ctx: DslScaleContext)
     override fun renderButton(rect: Rect, highlighted: Boolean, active: Boolean, color: Color) {
         if (rect.isEmpty) return
+        var textureY = 0
+        if (highlighted) textureY += 20
+        if (active) textureY += 40
+        val uvOuter = Rect(0.px, textureY.px, 200.px, (textureY + 20).px)
         
-        // Map uv to your custom 200x20 single bar
-        val uvOuter = Rect(0.px, 0.px, 200.px, 20.px)
-        val image = ImageHolder("kotlinmcuibackend:textures/gui/slider.png", 200.px, 20.px)
-        
-        // Procedural tint to handle active, hover, and disabled states dynamically
-        val finalColor = when {
-            !active -> color.change(
-                r = (color.rInt * 0.5).toInt(), 
-                g = (color.gInt * 0.5).toInt(), 
-                b = (color.bInt * 0.5).toInt()
-            ) // Darkened/dimmed for disabled
-            highlighted -> color.change(
-                r = minOf(255, (color.rInt * 1.25).toInt()), 
-                g = minOf(255, (color.gInt * 1.25).toInt()), 
-                b = minOf(255, (color.bInt * 1.25).toInt())
-            ) // Brightened highlight for hover
-            else -> color
-        }
-        
-        // Shrunk nine-slice border inset to -1px to match your slider.png.mcmeta border configuration
-        ImageStrategy.nineSlice(uvOuter, uvOuter.expand(-1.px), ctx.scale).render(rect, image, finalColor)
+        val image = ImageHolder("kotlinmcuibackend:textures/gui/slider.png", 256.px, 256.px)
+        ImageStrategy.nineSlice(uvOuter, uvOuter.expand(-3.px), ctx.scale).render(rect, image, color)
     }
 
     context(renderParam: GuiGraphicsExtractor)
@@ -70,7 +58,6 @@ internal val renderer = object : DslBackendRenderer<GuiGraphicsExtractor> {
 
     context(renderParam: GuiGraphicsExtractor, ctx: DslScaleContext)
     override fun renderContainer(rect: Rect) {
-        // Point to your custom bundled container background texture
         ImageStrategy.nineSlice(
             Rect(0.px, 0.px, 248.px, 166.px), Rect(3.px, 3.px, 245.px, 163.px), ctx.scale
         ).render(
@@ -82,7 +69,6 @@ internal val renderer = object : DslBackendRenderer<GuiGraphicsExtractor> {
 
     context(renderParam: GuiGraphicsExtractor, ctx: DslScaleContext)
     override fun renderSlot(rect: Rect) {
-        // Point to your custom slot layout inside inventory.png
         ImageStrategy.nineSlice(
             Rect(7.px, 141.px, 25.px, 159.px), Rect(8.px, 142.px, 24.px, 158.px), ctx.scale
         ).render(
@@ -104,35 +90,45 @@ internal val renderer = object : DslBackendRenderer<GuiGraphicsExtractor> {
     context(renderParam: GuiGraphicsExtractor, ctx: DslScaleContext)
     override fun renderItem(rect: Rect, item: String, count: Int, damage: Double?, enchanted: Boolean) {
         val itemOpt = BuiltInRegistries.ITEM.getOptional(Identifier.parse(item))
-        if (!itemOpt.isPresent) {
-            renderImage(ImageHolder("missing", 16.px, 16.px), rect, Rect(0.px, 0.px, 16.px, 16.px), Color.WHITE)
-        } else {
-            stack {
-                val itemStack = itemOpt.get().defaultInstance.also {
-                    it.count = count
+        if (!itemOpt.isPresent) return
+        
+        stack {
+            val itemStack = try {
+                val baseItem = itemOpt.get()
+                // Prevent creating itemstacks of invalid/unbound items like AIR
+                if (baseItem == net.minecraft.world.item.Items.AIR) return@stack
+                
+                ItemStack(baseItem, count).also {
                     if (damage != null) {
                         it.damageValue = (damage * it.maxDamage).roundToInt()
                     }
                     if (enchanted) it.set(DataComponents.ENCHANTMENT_GLINT_OVERRIDE, true)
                 }
-                val r = rect.toDouble().ifEmpty { return@stack }
-                renderParam.pose().translate(r.left.toFloat(), r.top.toFloat())
-                renderParam.pose().scale((r.width / 16.0).toFloat(), (r.height / 16.0).toFloat())
-
-                renderParam.item(itemStack, 0, 0)
-                val countStr = if (count > 1) count.toString() else null
-                renderParam.itemDecorations(Minecraft.getInstance().font, itemStack, 0, 0, countStr)
+            } catch (e: Exception) {
+                null
             }
+
+            if (itemStack == null) return@stack
+
+            val r = rect.toDouble().ifEmpty { return@stack }
+            renderParam.pose().translate(r.left.toFloat(), r.top.toFloat())
+            renderParam.pose().scale((r.width / 16.0).toFloat(), (r.height / 16.0).toFloat())
+
+            renderParam.item(itemStack, 0, 0)
+            val countStr = if (count > 1) count.toString() else null
+            renderParam.itemDecorations(Minecraft.getInstance().font, itemStack, 0, 0, countStr)
         }
     }
 
     context(renderParam: GuiGraphicsExtractor)
     override fun withScissor(rect: Rect, block: () -> Unit) {
+        renderParam.bufferSource.endBatch()
         val r = (rect / guiScale).toInt()
         renderParam.enableScissor(r.left, r.top, r.right, r.bottom)
         try {
             block()
         } finally {
+            renderParam.bufferSource.endBatch()
             renderParam.disableScissor()
         }
     }
@@ -166,39 +162,26 @@ internal val renderer = object : DslBackendRenderer<GuiGraphicsExtractor> {
 
     context(renderParam: GuiGraphicsExtractor)
     override fun renderImage(image: ImageHolder, rect: Rect, uv: Rect, color: Color) {
-        if (image.isEmpty) return
-        val r = rect.toInt()
-        val destX = r.left
-        val destY = r.top
-        val destW = r.width
-        val destH = r.height
+        if (image.isEmpty || image.id == "missing") return
+        val r = rect.toFloat().ifEmpty { return }
         
-        val u = uv.left.raw.toFloat()
-        val v = uv.top.raw.toFloat()
+        val minU = (uv.left / image.width).toFloat()
+        val maxU = (uv.right / image.width).toFloat()
+        val minV = (uv.top / image.height).toFloat()
+        val maxV = (uv.bottom / image.height).toFloat()
 
-        val imgW = image.width.raw.toInt()
-        val imgH = image.height.raw.toInt()
+        val renderType = RenderPipelines.GUI_TEXTURED.apply(Identifier.parse(image.id))
+        val vc = renderParam.bufferSource.getBuffer(renderType)
+        val matrix = renderParam.pose().last().pose()
         
-        // Dynamic textures render seamlessly with 26.1 scaling blit
-        renderParam.blit(
-            RenderPipelines.GUI_TEXTURED,
-            Identifier.parse(image.id),
-            destX,
-            destY,
-            u,
-            v,
-            destW,
-            destH,
-            imgW,
-            imgH,
-            color.argbInt
-        )
+        vc.vertex(matrix, r.left, r.top, 0f).color(color).uv(minU, minV).endVertex()
+        vc.vertex(matrix, r.left, r.bottom, 0f).color(color).uv(minU, maxV).endVertex()
+        vc.vertex(matrix, r.right, r.bottom, 0f).color(color).uv(maxU, maxV).endVertex()
+        vc.vertex(matrix, r.right, r.top, 0f).color(color).uv(maxU, minV).endVertex()
     }
 
     context(ctx: DslScaleContext, renderParam: GuiGraphicsExtractor)
     override fun renderDefaultBackground(rect: Rect) {
-        // Point to your custom dark tiled background texture.
-        // Color(0.25, 0.25, 0.25) multiplies your brown tiled background to darken it cleanly.
         ImageStrategy.repeat(scale = ctx.scale).render(
             rect,
             ImageHolder("kotlinmcuibackend:textures/gui/background.png", 32.px, 32.px),
@@ -243,4 +226,4 @@ internal val renderer = object : DslBackendRenderer<GuiGraphicsExtractor> {
             )
         }
     }
-}
+} 
