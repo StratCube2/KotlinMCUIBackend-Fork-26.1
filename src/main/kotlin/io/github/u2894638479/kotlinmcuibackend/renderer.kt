@@ -242,18 +242,29 @@ internal val renderer = object : DslBackendRenderer<GuiGraphicsExtractor> {
 
             val comp = Component.literal(char.code.toChar().toString()).withStyle(style)
             val shadow = char.style.isShadowed
-            
-            val xPos = x.raw.toInt()
-            val yPos = y.raw.toInt()
 
-            renderParam.text(
-                font,
-                comp,
-                xPos,
-                yPos,
-                char.color.argbInt,
-                shadow
-            )
+            // The 1.20.1 backend scaled the pose matrix per-character by
+            // (char.size / lineHeight) so DSL text using a custom .size()
+            // different from the font's native size actually rendered at
+            // that size. This step was dropped during the 26.1 port —
+            // renderChar always drew at native font size regardless of
+            // char.size — which is why text using a non-default size
+            // rendered too small.
+            val scale = (char.size.raw / lineHeight.raw).toFloat()
+            stack {
+                renderParam.pose().scale(scale, scale)
+                val xPos = (x.raw / scale).toInt()
+                val yPos = (y.raw / scale).toInt()
+
+                renderParam.text(
+                    font,
+                    comp,
+                    xPos,
+                    yPos,
+                    char.color.argbInt,
+                    shadow
+                )
+            }
         }
     }
 }
