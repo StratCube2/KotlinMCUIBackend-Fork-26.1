@@ -81,7 +81,7 @@ internal val renderer = object : DslBackendRenderer<GuiGraphicsExtractor> {
         
         renderParam.blitSprite(
             RenderPipelines.GUI_TEXTURED,
-            Identifier.parse("minecraft:container/slot/slot"),
+            Identifier.parse("minecraft:container/slot"),
             r.left, r.top, r.width, r.height,
             0xFFFFFFFF.toInt()
         )
